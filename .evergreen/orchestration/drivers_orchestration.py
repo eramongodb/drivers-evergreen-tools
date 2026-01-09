@@ -393,7 +393,7 @@ def run(opts):
     mdb_binaries_str = normalize_path(mdb_binaries)
 
     # The evergreen directory to path.
-    os.environ["PATH"] = f"{EVG_PATH}:{os.environ['PATH']}"
+    os.environ["PATH"] = f"{EVG_PATH}{os.pathsep}{os.environ['PATH']}"
 
     dl_start = datetime.now()
 
