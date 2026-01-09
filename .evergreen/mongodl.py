@@ -25,8 +25,10 @@ import re
 import shutil
 import sqlite3
 import ssl
+import subprocess
 import sys
 import tarfile
+import tempfile
 import textwrap
 import time
 import urllib.error
@@ -1034,21 +1036,48 @@ def _expand_tgz(
 def _expand_zip(
     ar: Path, dest: Path, pattern: "str | None", strip_components: int, test: bool
 ) -> int:
-    "Expand a .zip archive."
-    n_extracted = 0
-    with zipfile.ZipFile(str(ar), "r") as zf:
-        for item in zf.infolist():
-            n_extracted += _maybe_extract_member(
-                dest,
-                PurePath(item.filename),
-                pattern,
-                strip_components,
-                item.filename.endswith("/"),  ## Equivalent to: item.is_dir(),
-                lambda: zf.open(item, "r"),  # noqa: B023
-                0o777,
-                test=test,
-            )
-    return n_extracted
+    "Expand a .zip archive using 7z.exe."
+
+    exe_7z = shutil.which("7z.exe")
+    if exe_7z is None:
+        raise ValueError("Could not find a 7z.exe binary")
+
+    if pattern is not None:
+        LOGGER.warning("The --only flag is ignored when extracting with 7z.exe")
+
+    outdir = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+
+    try:
+        proc = subprocess.run(
+            [exe_7z, "x", f"-o{outdir.name}", ar],
+            check=True,
+            encoding="utf-8",
+            stderr=subprocess.STDOUT,
+            stdout=subprocess.PIPE,
+        )
+        LOGGER.info(proc.stdout)
+    except subprocess.CalledProcessError as e:
+        LOGGER.error(e.output)
+        LOGGER.error(str(e))
+        sys.exit(e.returncode)
+
+    os.makedirs(dest, exist_ok=True)
+
+    # Manually implement --strip-components.
+    for root, _, files in os.walk(outdir.name, topdown=True):
+        base = os.sep.join(root[len(outdir.name) :].split(os.sep))
+        depth = base.count(os.sep) - 1  # Do not include outdir in depth count.
+
+        # Reached the lowest depth after stripped components.
+        if depth == strip_components:
+            shutil.move(root, dest)
+            break
+
+        # Files with stripped components.
+        for f in files:
+            shutil.move(f"{root}{os.sep}{f}", f"{dest}{os.sep}{f}")
+
+    return 1  # Do not try to count.
 
 
 def _maybe_extract_member(
